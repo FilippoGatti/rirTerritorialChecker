@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Ambiente GIS & Dati Comuni - Lombardia</title>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <script src="https://unpkg.com/rbush@3.0.1/rbush.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        :root { --primary: #0056b3; --secondary: #28a745; --bg: #f4f7f6; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; padding: 20px; }
+        .nav-home { display: flex; justify-content: center; gap: 20px; margin-bottom: 30px; }
+        .nav-btn { padding: 20px 40px; font-size: 1.2em; cursor: pointer; border: none; border-radius: 8px; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: 0.3s; }
+        .nav-btn:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.15); }
+        .active-btn { background: var(--primary); color: white; }
+        
+        .section { display: none; max-width: 1000px; margin: auto; animation: fadeIn 0.5s; }
+        .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        /* Stili comuni */
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.85em; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .highlight { border: 2px solid #ffc107; background-color: #fffbeb; }
+        .badge { display: inline-block; background: var(--primary); color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; margin: 2px; }
+        input, select { padding: 10px; border: 1px solid #ccc; border-radius: 5px; width: 100%; box-sizing: border-box; margin: 10px 0; }
+        .btn-action { background: var(--secondary); color: white; border: none; padding: 12px 25px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="nav-home">
+    <button class="nav-btn" id="btnGen" onclick="showSection('genSection', 'btnGen')">⚙️ Comuni vicini</button>
+    <button class="nav-btn active-btn" id="btnCons" onclick="showSection('consSection', 'btnCons')">🔍 Ricerca RIR</button>
+</div>
+
+<hr style="border: 0; height: 1px; background: #ddd; margin-bottom: 30px;">
+
+<div id="genSection" class="section" style="display: none;">
+    <div class="card">
+        <h2>Generazione JSON comuni vicini</h2>
+        <p>Carica il GeoJSON dei comuni (WGS84) per creare l'elenco dei comuni confinanti.</p>
+        <input type="file" id="geoInput" accept=".geojson, .json">
+        <button class="btn-action" id="runGen" disabled onclick="processGeo()">Avvia Elaborazione Spaziale</button>
+        <div id="genStatus" style="margin-top:15px; font-weight:bold;"></div>
+        <button id="dlJson" style="display:none; margin-top:10px; background:#007bff;" class="btn-action">Scarica JSON Adiacenze</button>
+    </div>
+</div>
+
+<div id="consSection" class="section" style="display: block;">
+    <div class="card">
+        <h2>Ricerca comune e vicini nel Database RIR</h2>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+            <div>
+                <label>JSON comuni confinanti:</label>
+                <input type="file" id="jsonConsInput">
+            </div>
+            <div>
+                <label>Excel Database RIR:</label>
+                <input type="file" id="excelInput">
+            </div>
+        </div>
+        <div id="colDiv" style="display:none;">
+            <label>Seleziona colonna Comune in file Excel:</label>
+            <select id="colSelect"></select>
+        </div>
+    </div>
+
+    <div id="searchBox" class="card" style="display:none;">
+        <h3>Ricerca Comune e Vicini</h3>
+        <div style="display:flex; gap:10px;">
+            <input type="text" id="comuneSearch" placeholder="Nome comune...">
+            <button class="btn-action" onclick="runSearch()">CERCA</button>
+        </div>
+    </div>
+    <div id="resultsArea"></div>
+</div>
+
+<script>
+    // --- GESTIONE NAVIGAZIONE ---
+    function showSection(sectionId, btnId) {
+        document.querySelectorAll('.section').forEach(s => s.style.display = 'none');
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active-btn'));
+        document.getElementById(sectionId).style.display = 'block';
+        document.getElementById(btnId).classList.add('active-btn');
+    }
+
+    // --- LOGICA GENERAZIONE (SEZIONE 1) ---
+    let geoRaw = null;
+    document.getElementById('geoInput').addEventListener('change', (e) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            geoRaw = JSON.parse(ev.target.result);
+            document.getElementById('genStatus').innerText = "File caricato: " + geoRaw.features.length + " elementi.";
+            document.getElementById('runGen').disabled = false;
+        };
+        reader.readAsText(e.target.files[0]);
+    });
+
+    function processGeo() {
+        const status = document.getElementById('genStatus');
+        status.innerText = "Analisi in corso...";
+        
+        setTimeout(() => {
+            const tree = new RBush();
+            const items = geoRaw.features.map(f => {
+                const b = turf.bbox(f);
+                return { minX: b[0], minY: b[1], maxX: b[2], maxY: b[3], feature: f, nome: f.properties.COMUNE || f.properties.NAME || f.properties.nome };
+            });
+            tree.load(items);
+            
+            const adj = {};
+            items.forEach(a => {
+                adj[a.nome] = [];
+                tree.search({ minX: a.minX-0.00001, minY: a.minY-0.00001, maxX: a.maxX+0.00001, maxY: a.maxY+0.00001 }).forEach(b => {
+                    if (a.nome !== b.nome && turf.booleanIntersects(a.feature, b.feature)) adj[a.nome].push(b.nome);
+                });
+            });
+
+            status.innerText = "Analisi completata!";
+            const btn = document.getElementById('dlJson');
+            btn.style.display = 'block';
+            btn.onclick = () => {
+                const blob = new Blob([JSON.stringify(adj, null, 2)], {type: "application/json"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = "comuni_confinanti.json"; a.click();
+            };
+        }, 100);
+    }
+
+    // --- LOGICA CONSULTAZIONE (SEZIONE 2) ---
+    let consAdj = null;
+    let consExcel = null;
+
+    document.getElementById('jsonConsInput').addEventListener('change', (e) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => { consAdj = JSON.parse(ev.target.result); checkConsReady(); };
+        reader.readAsText(e.target.files[0]);
+    });
+
+    document.getElementById('excelInput').addEventListener('change', (e) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const wb = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+            consExcel = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+            const sel = document.getElementById('colSelect');
+            sel.innerHTML = Object.keys(consExcel[0]).map(k => `<option value="${k}">${k}</option>`).join('');
+            document.getElementById('colDiv').style.display = 'block';
+            checkConsReady();
+        };
+        reader.readAsArrayBuffer(e.target.files[0]);
+    });
+
+    function checkConsReady() { if(consAdj && consExcel) document.getElementById('searchBox').style.display = 'block'; }
+
+    function runSearch() {
+        const q = document.getElementById('comuneSearch').value.trim().toUpperCase();
+        const col = document.getElementById('colSelect').value;
+        const area = document.getElementById('resultsArea');
+        
+        const target = Object.keys(consAdj).find(k => k.toUpperCase() === q);
+        if(!target) { area.innerHTML = "Comune non trovato."; return; }
+
+        const list = [target, ...(consAdj[target] || [])];
+        let html = `<div class="card"><h3>Comune cercato: ${target}</h3><p>Confinanti: ${consAdj[target].join(', ')}</p></div>`;
+        
+        list.forEach(c => {
+            const rows = consExcel.filter(r => r[col] && r[col].toString().toUpperCase() === c.toUpperCase());
+            html += `<div class="card ${c === target ? 'highlight' : ''}"><h4>${c}</h4>`;
+            if(rows.length > 0) {
+                html += `<table><tr>${Object.keys(rows[0]).map(k => `<th>${k}</th>`).join('')}</tr>`;
+                rows.forEach(r => html += `<tr>${Object.values(r).map(v => `<td>${v}</td>`).join('')}</tr>`);
+                html += `</table>`;
+            } else html += `<p>Nessun dato.</p>`;
+            html += `</div>`;
+        });
+        area.innerHTML = html;
+    }
+</script>
+</body>
+</html>
