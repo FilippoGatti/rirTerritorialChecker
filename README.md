@@ -20,7 +20,7 @@ L'applicazione è una Single Page Application che integra due moduli:
 
 ## Dataset di Riferimento
 
-Il progetto include il file `adiacenze_italia_2026.json`, che contiene la rete di vicinato di tutti i comuni italiani calcolata sui confini amministrativi più recenti. Questo permette di:
+Il progetto include il file `comuni_confinanti_2026.json`, che contiene la rete di vicinato di tutti i comuni italiani calcolata sui confini amministrativi più recenti. Questo permette di:
 * Superare i limiti dei confini regionali durante le analisi.
 * Identificare rischi transfrontalieri (es. stabilimento in provincia limitrofa ma confinante).
 
